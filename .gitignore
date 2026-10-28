@@ -33,3 +33,5 @@ core.*
 
 # Data files
 data/**/*.jsonl
+# MN5 host venv for scripts/submit.py
+.submit-venv/

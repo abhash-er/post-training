@@ -1,0 +1,121 @@
+# Prelude SFT ratio study, run r18_prelude20m-sft_en-excellent-instruct-50pct_eu-real-12lang.
+# Mix built by data_prep/build_mixes.py; every row <= 4,096 tokens.
+# Hyper-parameters follow configs/trl/prelude-sft.yaml (OpenEuroLLM-Prelude-SFT-Excellent).
+# Submit: python scripts/submit.py --config configs/trl/prelude-ratio-study/r18.yaml
+
+method: sft
+backend: trl
+run_name: r18_prelude20m-sft_en-excellent-instruct-50pct_eu-real-12lang
+offline: true
+prefetch_assets: true
+
+container:
+  image: /gpfs/scratch/ehpc532/eit234648/post-training/containers/torch-base   # sandbox dir
+  path: "/gpfs/scratch/ehpc532/eit234648/post-training/containers/trl-venv/bin:/opt/conda/bin:/usr/local/bin:/usr/bin:/bin"
+  bind_mounts:
+    - /gpfs/scratch/ehpc532
+  env_file: env/mn5.env
+
+model:
+  name_or_path: "/gpfs/scratch/ehpc532/eit234648/models/openeurollm/prelude-anneal300b-256k-rope20m-cont"
+  attn_implementation: "kernels-community/flash-attn3"   # Hub kernel, prefetched into HF_HOME (torch29-cxx11-cu126)
+  dtype: "bfloat16"
+  revision: null
+  tokenizer_name_or_path: "/gpfs/scratch/ehpc532/eit234648/models/openeurollm/tokenizer-256k-qwen3-tokens"
+  tokenizer_revision: null
+
+training:
+  num_train_epochs: 2
+  num_training_samples: null
+  num_training_tokens: null
+  learning_rate: 8.0e-5
+  effective_batch_size: 32            # 8 nodes x 4 GPUs x 1, no grad accumulation
+  per_device_train_batch_size: 1
+  warmup_ratio: 0.03
+  adam_beta2: 0.95
+  lr_scheduler_type: "linear"
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: null
+  bf16: true
+  seed: 42
+  use_liger_kernel: true
+
+sft:
+  max_seq_length: 32768
+  packing: true
+  truncated_span_action: warn
+  dataset_num_proc: 32
+
+checkpointing:
+  save_steps: 250
+  save_total_limit: 2
+  inference_checkpoint_steps: 250
+  inference_checkpoint_path: "inference_checkpoints"
+
+data:
+  chat_template: "qwen3"
+  num_proc: 32
+  seed: 42
+  datasets:
+    - name: "r18"
+      path: "/gpfs/scratch/ehpc532/eit234648/datasets/prelude_ratio_study/mixes/r18_prelude20m-sft_en-excellent-instruct-50pct_eu-real-12lang.parquet"
+      split: "train"
+      weight: 1.0
+      transform: null
+
+deepspeed:
+  bf16:
+    enabled: true
+  zero_optimization:
+    stage: 2
+    overlap_comm: false
+    contiguous_gradients: true
+    reduce_scatter: true
+  gradient_clipping: 1.0
+  train_micro_batch_size_per_gpu: "auto"
+  gradient_accumulation_steps: "auto"
+  train_batch_size: "auto"
+  optimizer:
+    type: AdamW
+    params:
+      lr: "auto"
+      betas: "auto"
+      eps: "auto"
+      weight_decay: "auto"
+
+accelerate:
+  mixed_precision: "bf16"
+  use_deepspeed: true
+  deepspeed_multinode_launcher: "standard"
+  same_network: true
+  rdzv_backend: "static"
+  dynamo_backend: "no"
+
+logging:
+  report_to:
+    - "tensorboard"
+  wandb_project: "prelude-ratio-study"
+  logging_steps: 10
+  include_num_input_tokens_seen: "non_padding"
+
+slurm:
+  partition: "acc"
+  account: "ehpc532"
+  qos: "acc_ehpc"
+  num_nodes: 8
+  gpus_per_node: 4
+  cpus_per_task: 80
+  wall_time: "08:00:00"
+  job_name: "r18-prelude-sft"
+  signal_time_seconds: 300
+  max_failures: 1
+  modules:
+    - "singularity/4.1.5"
+  module_purge: true
+
+debug:
+  enabled: false
+  override_existing: false
+paths:
+  output_base: "outputs"
+  debug_base: "outputs/debug"

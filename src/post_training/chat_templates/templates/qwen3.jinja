@@ -1,3 +1,9 @@
+{%- set dt = namespace(on=false) %}
+{%- for message in messages %}
+    {%- if message.role == "environment" or message.function_calls or message.functions %}
+        {%- set dt.on = true %}
+    {%- endif %}
+{%- endfor %}
 {%- if tools %}
     {{- '<|im_start|>system\n' }}
     {%- if messages[0].role == 'system' %}
@@ -11,7 +17,11 @@
     {{- "\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n" }}
 {%- else %}
     {%- if messages[0].role == 'system' %}
-        {{- '<|im_start|>system\n' + messages[0].content + '<|im_end|>\n' }}
+        {{- '<|im_start|>system\n' + messages[0].content }}
+        {%- if messages[0].functions %}
+            {{- ' <functions>' + messages[0].functions + '</functions>' }}
+        {%- endif %}
+        {{- '<|im_end|>\n' }}
     {%- endif %}
 {%- endif %}
 {%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
@@ -40,9 +50,12 @@
                 {%- set content = content.split('</think>')[-1].lstrip('\n') %}
             {%- endif %}
         {%- endif %}
+        {%- if message.function_calls %}
+            {%- set content = content + '<function_calls>' + message.function_calls + '</function_calls>' %}
+        {%- endif %}
         {%- set assistant_body %}
-        {%- if loop.index0 > ns.last_query_index %}
-            {%- if loop.last or (not loop.last and reasoning_content) %}
+        {%- if loop.index0 > ns.last_query_index or dt.on %}
+            {%- if loop.last or (not loop.last and reasoning_content) or dt.on %}
                 {{- '<think>\n' + reasoning_content.strip('\n') + '\n</think>\n\n' + content.lstrip('\n') }}
             {%- else %}
                 {{- content }}
@@ -72,7 +85,7 @@
         {{- '<|im_end|>' }}
         {%- endset %}
         {{- '<|im_start|>' + message.role + '\n' }}
-        {%- if loop.index0 > ns.last_query_index %}
+        {%- if loop.index0 > ns.last_query_index or dt.on %}
             {%- generation %}{{- assistant_body -}}{%- endgeneration %}
         {%- else %}
             {{- assistant_body }}
@@ -88,6 +101,8 @@
         {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
             {{- '<|im_end|>\n' }}
         {%- endif %}
+    {%- elif message.role == "environment" %}
+        {{- '<|im_start|>environment\n' + content + '<|im_end|>\n' }}
     {%- endif %}
 {%- endfor %}
 {%- if add_generation_prompt %}

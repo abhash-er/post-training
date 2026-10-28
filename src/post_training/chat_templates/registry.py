@@ -55,6 +55,10 @@ _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 # markers therefore wrap the assistant body only when
 # ``loop.index0 > ns.last_query_index``.  Multi-step tool exchanges keep every
 # assistant turn after the last user query, since those retain their traces.
+# Exception: rows in Dolci-Instruct-SFT's tool schema (system ``functions``,
+# assistant ``function_calls``, role ``environment``) are rendered the way
+# ``olmo3-instruct-sft`` renders them and train EVERY assistant turn, each with
+# an empty think block, matching AllenAI's recipe for that data.
 CHAT_TEMPLATES: dict[str, str] = {
     "chatml": "chatml.jinja",
     "olmo3": "olmo3.jinja",

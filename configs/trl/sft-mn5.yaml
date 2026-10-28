@@ -1,0 +1,143 @@
+# ============================================================================
+# SFT config for MareNostrum 5 (BSC) — TRL-in-container (Strategy A:
+# prebuilt x86 PyTorch .sif + overlay venv on PATH).
+#
+# Smoke-test defaults: small model + small dataset + 10 steps on 1 GPU / qos
+# acc_debug. Swap model/data/slurm for a real run (see NOTE markers).
+#
+# Submit:  python scripts/submit.py --config configs/trl/sft-mn5.yaml
+# ============================================================================
+
+method: sft
+backend: trl
+run_name: null
+offline: true
+prefetch_assets: true          # submit.py downloads model+dataset on login node first
+
+# -- Container ---------------------------------------------------------------
+container:
+  # Sandbox DIRECTORY (not a .sif): MN5's login-node process-killer OOMs mksquashfs
+  # on this large image, so we run from an extracted sandbox. singularity exec treats
+  # it identically. See memory: post-training-mn5-setup.
+  image: /gpfs/scratch/ehpc532/eit234648/post-training/containers/torch-base
+  # PATH inside the container: overlay venv first, then the image's conda, then system.
+  path: "/gpfs/scratch/ehpc532/eit234648/post-training/containers/trl-venv/bin:/opt/conda/bin:/usr/local/bin:/usr/bin:/bin"
+  bind_mounts:
+    - /gpfs/scratch/ehpc532        # covers user scratch, shared /models, containers, HF cache
+  env_file: env/mn5.env
+
+# -- Model -------------------------------------------------------------------
+model:
+  name_or_path: "Qwen/Qwen2.5-0.5B-Instruct"   # NOTE: real run -> allenai/Olmo-3-1025-7B
+  attn_implementation: "sdpa"                  # NOTE: "flash_attention_2" once FA2 is in the venv
+  dtype: "bfloat16"
+  revision: null
+  tokenizer_name_or_path: null
+  tokenizer_revision: null
+
+# -- Training ----------------------------------------------------------------
+training:
+  max_steps: 10
+  num_training_samples: null
+  num_training_tokens: null
+  learning_rate: 2.0e-5
+  effective_batch_size: 8
+  per_device_train_batch_size: 4
+  warmup_steps: 0.03
+  lr_scheduler_type: "cosine_with_min_lr"
+  lr_scheduler_kwargs:
+    min_lr_rate: 0.1
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: null
+  bf16: true
+  seed: 42
+  use_liger_kernel: false        # NOTE: enable once verified for your model
+  liger_kernel_config: null
+
+# -- SFT ---------------------------------------------------------------------
+sft:
+  max_seq_length: 2048
+  packing: true
+  truncated_span_action: warn
+
+# -- Checkpointing -----------------------------------------------------------
+checkpointing:
+  save_steps: 200
+  save_total_limit: 1
+  inference_checkpoint_steps: null
+  inference_checkpoint_path: "inference_checkpoints"
+
+# -- Data --------------------------------------------------------------------
+data:
+  chat_template: "qwen3"         # must have {% generation %} markers for SFT loss masking;
+                                 # plain "chatml" lacks them. qwen3 = ChatML tokens + markers.
+  num_proc: null
+  seed: 42
+  datasets:
+    - name: "capybara"
+      path: "trl-lib/Capybara"   # small (~16k), already conversational
+      split: "train"
+      weight: 1.0
+      transform: null
+
+# -- DeepSpeed ---------------------------------------------------------------
+deepspeed:
+  bf16:
+    enabled: true
+  zero_optimization:
+    stage: 2
+    overlap_comm: true
+    contiguous_gradients: true
+    reduce_scatter: true
+  gradient_clipping: 1.0
+  train_micro_batch_size_per_gpu: "auto"
+  gradient_accumulation_steps: "auto"
+  train_batch_size: "auto"
+  optimizer:
+    type: AdamW
+    params:
+      lr: "auto"
+      betas: "auto"
+      eps: "auto"
+      weight_decay: "auto"
+
+# -- Accelerate --------------------------------------------------------------
+accelerate:
+  mixed_precision: "bf16"
+  use_deepspeed: true
+  deepspeed_multinode_launcher: "standard"
+  same_network: true
+  rdzv_backend: "static"
+  dynamo_backend: "no"           # NOTE: "inductor" only after confirming torch.compile works
+
+# -- Logging -----------------------------------------------------------------
+logging:
+  report_to:
+    - "tensorboard"              # wandb off for smoke test (offline anyway)
+  wandb_project: "sft-mn5"
+  logging_steps: 1
+  include_num_input_tokens_seen: "non_padding"
+
+# -- SLURM (MN5 acc partition) -----------------------------------------------
+slurm:
+  partition: "acc"
+  account: "ehpc532"
+  qos: "acc_debug"               # NOTE: acc_ehpc for real/longer runs
+  num_nodes: 1
+  gpus_per_node: 1               # NOTE: 4 for a real run
+  cpus_per_task: 20              # NOTE: up to 80 on a full acc node
+  wall_time: "02:00:00"
+  job_name: "sft-mn5-smoke"
+  signal_time_seconds: 300
+  max_failures: 1
+  modules:
+    - "singularity/4.1.5"
+  module_purge: true             # drop MN5 Intel modules (CC=icc leak) before launch
+
+# -- Debug / paths -----------------------------------------------------------
+debug:
+  enabled: false
+  override_existing: false
+paths:
+  output_base: "outputs"
+  debug_base: "outputs/debug"

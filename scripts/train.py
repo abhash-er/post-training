@@ -168,9 +168,15 @@ def main() -> None:
     run_dir = setup_run_directory(config)
     logger.info("Run directory: %s", run_dir)
 
-    # Freeze a copy of the config into the run directory.
-    frozen_path = run_dir / "config.yaml"
-    config.save(frozen_path)
+    # Freeze a copy of the config into the run directory. Every rank loads this
+    # same file at startup, so only global rank 0 rewrites it, and atomically:
+    # an in-place rewrite let other ranks read a truncated file and fail
+    # validation.
+    if int(os.environ.get("RANK", "0")) == 0:
+        frozen_path = run_dir / "config.yaml"
+        tmp_path = frozen_path.with_suffix(".yaml.tmp")
+        config.save(tmp_path)
+        os.replace(tmp_path, frozen_path)
 
     # ── Build trainer & launch ──────────────────────────────────────
     trainer = build_trainer(config, run_dir)

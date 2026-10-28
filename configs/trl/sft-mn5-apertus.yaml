@@ -1,0 +1,122 @@
+# SFT on MN5 — swiss-ai/Apertus-v1.5-8B (xIELU arch, apertus chat template).
+# Submit: python scripts/submit.py --config configs/trl/sft-mn5-apertus.yaml
+# Data is a placeholder (trl-lib/Capybara) — swap `data.datasets` for your own
+# generated dataset when ready.
+
+method: sft
+backend: trl
+run_name: null
+offline: true
+prefetch_assets: true
+
+container:
+  image: /gpfs/scratch/ehpc532/eit234648/post-training/containers/torch-base   # sandbox dir
+  path: "/gpfs/scratch/ehpc532/eit234648/post-training/containers/trl-venv/bin:/opt/conda/bin:/usr/local/bin:/usr/bin:/bin"
+  bind_mounts:
+    - /gpfs/scratch/ehpc532
+  env_file: env/mn5.env
+
+model:
+  name_or_path: "swiss-ai/Apertus-v1.5-8B"
+  attn_implementation: "sdpa"        # NOTE: Apertus xIELU arch; sdpa is safest. FA2 later.
+  dtype: "bfloat16"
+  revision: null
+  tokenizer_name_or_path: null       # Apertus ships its own tokenizer
+  tokenizer_revision: null
+
+training:
+  max_steps: 50                      # short test run; raise for a real SFT
+  num_training_samples: null
+  num_training_tokens: null
+  learning_rate: 5.0e-6
+  effective_batch_size: 32
+  per_device_train_batch_size: 1
+  warmup_steps: 0.03
+  lr_scheduler_type: "cosine_with_min_lr"
+  lr_scheduler_kwargs:
+    min_lr_rate: 0.1
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs: null
+  bf16: true
+  seed: 42
+  use_liger_kernel: false
+  liger_kernel_config: null
+
+sft:
+  max_seq_length: 4096
+  packing: true
+  truncated_span_action: warn
+
+checkpointing:
+  save_steps: 50
+  save_total_limit: 1
+  inference_checkpoint_steps: null
+  inference_checkpoint_path: "inference_checkpoints"
+
+data:
+  chat_template: "apertus"
+  num_proc: null
+  seed: 42
+  datasets:
+    - name: "capybara"
+      path: "trl-lib/Capybara"
+      split: "train"
+      weight: 1.0
+      transform: null
+
+deepspeed:
+  bf16:
+    enabled: true
+  zero_optimization:
+    stage: 2
+    overlap_comm: false
+    contiguous_gradients: true
+    reduce_scatter: true
+  gradient_clipping: 1.0
+  train_micro_batch_size_per_gpu: "auto"
+  gradient_accumulation_steps: "auto"
+  train_batch_size: "auto"
+  optimizer:
+    type: AdamW
+    params:
+      lr: "auto"
+      betas: "auto"
+      eps: "auto"
+      weight_decay: "auto"
+
+accelerate:
+  mixed_precision: "bf16"
+  use_deepspeed: true
+  deepspeed_multinode_launcher: "standard"
+  same_network: true
+  rdzv_backend: "static"
+  dynamo_backend: "no"               # NOTE: "inductor" only after confirming torch.compile works in-container
+
+logging:
+  report_to:
+    - "tensorboard"
+  wandb_project: "sft-mn5"
+  logging_steps: 1
+  include_num_input_tokens_seen: "non_padding"
+
+slurm:
+  partition: "acc"
+  account: "ehpc532"
+  qos: "acc_debug"           # debug QOS (2h, 1 job); final runs come later with your own dataset
+  num_nodes: 1
+  gpus_per_node: 4
+  cpus_per_task: 80
+  wall_time: "02:00:00"       # acc_debug max
+  job_name: "sft-apertus"
+  signal_time_seconds: 300
+  max_failures: 1
+  modules:
+    - "singularity/4.1.5"
+  module_purge: true
+
+debug:
+  enabled: false
+  override_existing: false
+paths:
+  output_base: "outputs"
+  debug_base: "outputs/debug"

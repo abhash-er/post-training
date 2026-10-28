@@ -181,6 +181,71 @@ def test_qwen3_excludes_prompt_header_and_turn_separator() -> None:
     assert span.endswith("<|im_end|>")
 
 
+_EMPTY_THINK = "<think>\n\n</think>\n\n"
+
+# A Dolci-Instruct-SFT tool-use row, in Dolci's own schema: tool signatures in
+# the system message's `functions`, Python-style calls in the assistant's
+# `function_calls`, tool results under role `environment`, multi-turn.
+_DOLCI_TOOL_ROW = [
+    {"role": "system", "content": "You can call functions.", "functions": '[{"name": "f"}]'},
+    {"role": "user", "content": "Q1"},
+    {"role": "assistant", "content": None, "function_calls": "f(x=1)\ng(y=2)"},
+    {"role": "environment", "content": '{"result": 1}\n{"result": 2}'},
+    {"role": "assistant", "content": "A1"},
+    {"role": "user", "content": "Q2"},
+    {"role": "assistant", "content": None, "function_calls": "f(x=3)"},
+    {"role": "environment", "content": '{"result": 3}'},
+    {"role": "assistant", "content": "A2"},
+]
+
+
+def test_qwen3_dolci_tool_row_trains_every_assistant_turn() -> None:
+    """Dolci tool rows follow AllenAI's OLMo-3 Instruct-SFT recipe: every
+    assistant turn is in the loss, call-only turns included, each rendered
+    as it was generated (empty think block, then the answer or the calls).
+    """
+    spans = _assistant_spans("qwen3", _DOLCI_TOOL_ROW)
+
+    assert spans == [
+        _EMPTY_THINK + "<function_calls>f(x=1)\ng(y=2)</function_calls><|im_end|>",
+        _EMPTY_THINK + "A1<|im_end|>",
+        _EMPTY_THINK + "<function_calls>f(x=3)</function_calls><|im_end|>",
+        _EMPTY_THINK + "A2<|im_end|>",
+    ]
+
+
+def test_qwen3_dolci_tool_row_renders_functions_and_environment_as_prompt() -> None:
+    """The signatures and the tool results are rendered (as in
+    olmo3-instruct-sft) but stay outside the loss."""
+    chat_template_utils = pytest.importorskip("transformers.utils.chat_template_utils")
+    compiled = chat_template_utils._compile_jinja_template(get_chat_template("qwen3"))
+    rendered, _ = chat_template_utils._render_with_assistant_indices(
+        compiled, _DOLCI_TOOL_ROW, None, None, False
+    )
+    spans = "".join(_assistant_spans("qwen3", _DOLCI_TOOL_ROW))
+
+    assert rendered.startswith(
+        '<|im_start|>system\nYou can call functions. <functions>[{"name": "f"}]</functions><|im_end|>\n'
+    )
+    assert '<|im_start|>environment\n{"result": 1}\n{"result": 2}<|im_end|>\n' in rendered
+    assert "<functions>" not in spans
+    assert '{"result"' not in spans
+    assert "Q1" not in spans and "Q2" not in spans
+
+
+def test_qwen3_null_tool_fields_keep_final_turn_only() -> None:
+    """A mixed parquet gives every row the Dolci fields, as None when unused.
+    Such a row is not a tool row: only the final exchange stays in the loss."""
+    messages = [
+        {"role": "user", "content": "Q1", "function_calls": None, "functions": None},
+        {"role": "assistant", "content": "A1", "function_calls": None, "functions": None},
+        {"role": "user", "content": "Q2", "function_calls": None, "functions": None},
+        {"role": "assistant", "content": "A2", "function_calls": None, "functions": None},
+    ]
+
+    assert _assistant_spans("qwen3", messages) == [_EMPTY_THINK + "A2<|im_end|>"]
+
+
 def test_olmo3_instruct_sft_masks_all_assistant_turns() -> None:
     """Counterpoint to the qwen3 behaviour above, pinned deliberately: the
     OLMo templates do not strip anything from history, so every assistant
